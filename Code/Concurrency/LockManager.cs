@@ -6,17 +6,17 @@ public static class LockManager
 {
     private static readonly ConcurrentDictionary<string, Lazy<Lock>> Locks = new();
 
-    public static IDisposable GetLock(string key)
+    public static IDisposable GetLock(string key, int initialConcurrentCalls = 1, int maxConcurrentCalls = 1)
     {
-        var lazyLock = Locks.GetOrAdd(key, new Lazy<Lock>(() => new Lock()));
+        var lazyLock = Locks.GetOrAdd(key, new Lazy<Lock>(() => new Lock(initialConcurrentCalls, maxConcurrentCalls)));
         var concurrentLock = lazyLock.Value;
         concurrentLock.Wait();
         return concurrentLock;
     }
 
-    public static async Task<IDisposable> GetLockAsync(string key)
+    public static async Task<IDisposable> GetLockAsync(string key, int initialConcurrentCalls = 1, int maxConcurrentCalls = 1)
     {
-        var lazyLock = Locks.GetOrAdd(key, new Lazy<Lock>(() => new Lock()));
+        var lazyLock = Locks.GetOrAdd(key, new Lazy<Lock>(() => new Lock(initialConcurrentCalls, maxConcurrentCalls)));
         var concurrentLock = lazyLock.Value;
         await concurrentLock.WaitAsync();
         return concurrentLock;
@@ -24,7 +24,12 @@ public static class LockManager
 
     public class Lock : IDisposable
     {
-        private readonly SemaphoreSlim _semaphoreSlim = new(1);
+        private readonly SemaphoreSlim _semaphoreSlim;
+
+        public Lock(int initialConcurrentCalls = 1, int maxConcurrentCalls = 1)
+        {
+            _semaphoreSlim = new SemaphoreSlim(initialConcurrentCalls, maxConcurrentCalls);
+        }
 
         public void Wait()
         {
