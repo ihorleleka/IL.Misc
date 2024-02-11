@@ -6,7 +6,7 @@ namespace IL.Misc.Tests.Concurrency;
 public class LockManagerTests
 {
     [Fact]
-    public void GetLock_SameKey_ReturnsSameInstance()
+    public void GetLock_SameKey_ReturnsNotSameInstances_Of_Lock_Due_To_Self_Removal_When_ConcurrencyLevelIs_0()
     {
         // Arrange
         var key = "testKey";
@@ -18,11 +18,11 @@ public class LockManagerTests
         lock2.Dispose();
 
         // Assert
-        Assert.Same(lock1, lock2);
+        Assert.NotSame(lock1, lock2);
     }
 
     [Fact]
-    public async Task GetLockAsync_SameKey_ReturnsSameInstance()
+    public async Task GetLockAsync_SameKey_ReturnsNotSameInstances_Of_Lock_Due_To_Self_Removal_When_ConcurrencyLevelIs_0()
     {
         // Arrange
         var key = "testKey";
@@ -34,7 +34,7 @@ public class LockManagerTests
         lock2.Dispose();
 
         // Assert
-        Assert.Same(lock1, lock2);
+        Assert.NotSame(lock1, lock2);
     }
 
     [Fact]
@@ -83,32 +83,32 @@ public class LockManagerTests
         int countInsideUsing2;
         int countOutsideUsing2;
         // Act
-        using (lockObj1 = LockManager.GetLock(key))
+        using (lockObj1 = LockManager.GetLock(key, 2, 2))
         {
             // Assert
             Assert.NotNull(lockObj1);
             countInsideUsing1 = ((LockManager.Lock)lockObj1).GetState();
+
+            using (lockObj2 = LockManager.GetLock(key))
+            {
+                // Assert
+                Assert.NotNull(lockObj2);
+                countInsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
+            }
+
+            // Lock should be disposed at this point
+            countOutsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
         }
 
         // Lock should be disposed at this point
         countOutsideUsing1 = ((LockManager.Lock)lockObj1).GetState();
 
-        using (lockObj2 = LockManager.GetLock(key))
-        {
-            // Assert
-            Assert.NotNull(lockObj2);
-            countInsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
-        }
-
-        // Lock should be disposed at this point
-        countOutsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
 
         // Act & Assert
         Assert.NotEqual(countInsideUsing1, countOutsideUsing1);
         Assert.NotEqual(countInsideUsing2, countOutsideUsing2);
 
-        Assert.Equal(countInsideUsing1, countInsideUsing2);
-        Assert.Equal(countOutsideUsing1, countOutsideUsing2);
+        Assert.Equal(countInsideUsing1, countOutsideUsing2);
 
         Assert.Same(lockObj1, lockObj2);
     }
@@ -125,32 +125,32 @@ public class LockManagerTests
         int countInsideUsing2;
         int countOutsideUsing2;
         // Act
-        using (lockObj1 = await LockManager.GetLockAsync(key))
+        using (lockObj1 = await LockManager.GetLockAsync(key, 2, 2))
         {
             // Assert
             Assert.NotNull(lockObj1);
             countInsideUsing1 = ((LockManager.Lock)lockObj1).GetState();
+
+
+            using (lockObj2 = await LockManager.GetLockAsync(key))
+            {
+                // Assert
+                Assert.NotNull(lockObj2);
+                countInsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
+            }
+
+            // Lock should be disposed at this point
+            countOutsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
         }
 
         // Lock should be disposed at this point
         countOutsideUsing1 = ((LockManager.Lock)lockObj1).GetState();
 
-        using (lockObj2 = await LockManager.GetLockAsync(key))
-        {
-            // Assert
-            Assert.NotNull(lockObj2);
-            countInsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
-        }
-
-        // Lock should be disposed at this point
-        countOutsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
-
         // Act & Assert
         Assert.NotEqual(countInsideUsing1, countOutsideUsing1);
         Assert.NotEqual(countInsideUsing2, countOutsideUsing2);
 
-        Assert.Equal(countInsideUsing1, countInsideUsing2);
-        Assert.Equal(countOutsideUsing1, countOutsideUsing2);
+        Assert.Equal(countInsideUsing1, countOutsideUsing2);
 
         Assert.Same(lockObj1, lockObj2);
     }
