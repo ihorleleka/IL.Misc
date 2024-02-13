@@ -83,7 +83,7 @@ public class LockManagerTests
         int countInsideUsing2;
         int countOutsideUsing2;
         // Act
-        using (lockObj1 = LockManager.GetLock(key, 2, 2))
+        using (lockObj1 = LockManager.GetLock(key, 2))
         {
             // Assert
             Assert.NotNull(lockObj1);
@@ -125,7 +125,7 @@ public class LockManagerTests
         int countInsideUsing2;
         int countOutsideUsing2;
         // Act
-        using (lockObj1 = await LockManager.GetLockAsync(key, 2, 2))
+        using (lockObj1 = await LockManager.GetLockAsync(key, 2))
         {
             // Assert
             Assert.NotNull(lockObj1);

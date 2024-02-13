@@ -6,25 +6,24 @@ public static class LockManager
 {
     private static readonly ConcurrentDictionary<string, Lazy<Lock>> Locks = new();
 
-    public static IDisposable GetLock(string key, int initialConcurrentCalls = 1, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
+    public static IDisposable GetLock(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
     {
-        var concurrentLock = AcquireLock(key, initialConcurrentCalls, maxConcurrentCalls);
+        var concurrentLock = AcquireLock(key, maxConcurrentCalls);
         concurrentLock.Wait(cancellationToken);
         return concurrentLock;
     }
 
-    public static async Task<IDisposable> GetLockAsync(string key, int initialConcurrentCalls = 1, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
+    public static async Task<IDisposable> GetLockAsync(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
     {
-        var concurrentLock = AcquireLock(key, initialConcurrentCalls, maxConcurrentCalls);
+        var concurrentLock = AcquireLock(key, maxConcurrentCalls);
         await concurrentLock.WaitAsync(cancellationToken);
         return concurrentLock;
     }
 
-    private static Lock AcquireLock(string key, int initialConcurrentCalls, int maxConcurrentCalls)
+    private static Lock AcquireLock(string key, int maxConcurrentCalls)
     {
         var lazyLock = Locks.GetOrAdd(key,
-            new Lazy<Lock>(() => new Lock(initialConcurrentCalls,
-                maxConcurrentCalls,
+            new Lazy<Lock>(() => new Lock(maxConcurrentCalls,
                 () => { Locks.TryRemove(key, out _); })
             )
         );
@@ -36,45 +35,37 @@ public static class LockManager
     {
         private readonly SemaphoreSlim _semaphoreSlim;
         private readonly Action? _selfDeletionAction;
-        private int _currentConcurrencyLevel;
+        private readonly int _maxConcurrentCalls;
 
-        internal Lock(int initialConcurrentCalls = 1, int maxConcurrentCalls = 1, Action? selfDeletionAction = null)
+        internal Lock(int maxConcurrentCalls = 1, Action? selfDeletionAction = null)
         {
-            _semaphoreSlim = new SemaphoreSlim(initialConcurrentCalls, maxConcurrentCalls);
+            _semaphoreSlim = new SemaphoreSlim(maxConcurrentCalls, maxConcurrentCalls);
             _selfDeletionAction = selfDeletionAction;
-            _currentConcurrencyLevel = 0;
+            _maxConcurrentCalls = maxConcurrentCalls;
         }
 
-        public void Wait(CancellationToken cancellationToken)
+        internal void Wait(CancellationToken cancellationToken)
         {
-            _currentConcurrencyLevel++;
             _semaphoreSlim.Wait(cancellationToken);
         }
 
-        public async Task WaitAsync(CancellationToken cancellationToken)
+        internal async Task WaitAsync(CancellationToken cancellationToken)
         {
-            _currentConcurrencyLevel++;
             await _semaphoreSlim.WaitAsync(cancellationToken);
         }
 
         public void Dispose()
         {
             _semaphoreSlim.Release();
-            _currentConcurrencyLevel--;
-            if (_currentConcurrencyLevel == 0)
+            if (GetState() == _maxConcurrentCalls)
             {
                 _selfDeletionAction?.Invoke();
             }
         }
 
-        public int GetState()
+        internal int GetState()
         {
             return _semaphoreSlim.CurrentCount;
-        }
-
-        public bool IsInUse()
-        {
-            return _currentConcurrencyLevel == 0;
         }
     }
 }
