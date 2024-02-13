@@ -154,4 +154,90 @@ public class LockManagerTests
 
         Assert.Same(lockObj1, lockObj2);
     }
+
+    [Fact]
+    public void GetLockAsync_SameKey_ReturnsSameInstances_Of_Lock_If_Other_Threads_Awaiting()
+    {
+        // Arrange
+        var key = "testKey";
+        IDisposable? lock1 = default;
+        IDisposable? lock2 = default;
+        IDisposable? lock3 = default;
+
+        // Act
+        var tasks = new[]
+        {
+            Task.Run(async () =>
+            {
+                using (lock1 = await LockManager.GetLockAsync(key))
+                {
+                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
+                }
+            }),
+            Task.Run(async () =>
+            {
+                using (lock2 = await LockManager.GetLockAsync(key))
+                {
+                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
+                }
+            }),
+            Task.Run(async () =>
+            {
+                using (lock3 = await LockManager.GetLockAsync(key))
+                {
+                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
+                }
+            })
+        };
+
+        Task.WaitAll(tasks);
+
+        // Assert
+        Assert.Same(lock1, lock2);
+        Assert.Same(lock1, lock3);
+        Assert.Same(lock2, lock3);
+    }
+
+    [Fact]
+    public void GetLock_SameKey_ReturnsSameInstances_Of_Lock_If_Other_Threads_Awaiting()
+    {
+        // Arrange
+        var key = "testKey";
+        IDisposable? lock1 = default;
+        IDisposable? lock2 = default;
+        IDisposable? lock3 = default;
+
+        // Act
+        var tasks = new[]
+        {
+            Task.Run(() =>
+            {
+                using (lock1 = LockManager.GetLock(key))
+                {
+                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
+                }
+            }),
+            Task.Run(() =>
+            {
+                using (lock2 = LockManager.GetLock(key))
+                {
+                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
+                }
+            }),
+            Task.Run(() =>
+            {
+                using (lock3 = LockManager.GetLock(key))
+                {
+                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
+                }
+            })
+        };
+
+        Task.WaitAll(tasks);
+
+        // Assert
+        Assert.Same(lock1, lock2);
+        Assert.Same(lock1, lock3);
+        Assert.Same(lock2, lock3);
+    }
 }
