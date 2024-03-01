@@ -6,6 +6,17 @@ public static class LockManager
 {
     private static readonly ConcurrentDictionary<string, Lazy<Lock>> Locks = new();
 
+    /// <summary>
+    /// By availability it means Lock has any available slots on semaphore or not created at all.
+    /// </summary>
+    /// <param name="key"></param>
+    /// <returns></returns>
+    public static bool IsLockAvailable(string key)
+    {
+        var lockExists = Locks.TryGetValue(key, out var concurrentLock);
+        return !lockExists || lockExists && concurrentLock!.Value.GetState() > 0;
+    }
+
     public static IDisposable GetLock(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
     {
         var concurrentLock = AcquireLock(key, maxConcurrentCalls);

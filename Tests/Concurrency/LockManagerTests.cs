@@ -22,6 +22,56 @@ public class LockManagerTests
     }
 
     [Fact]
+    public void IsAvailable_ReturnsTrue_If_Lock_Is_Missing()
+    {
+        // Arrange
+        var key = "testKey";
+
+        // Act
+        var available = LockManager.IsLockAvailable(key);
+
+        // Assert
+        Assert.True(available);
+    }
+
+    [Fact]
+    public void IsAvailable_ReturnsTrue_If_Lock_Has_Free_Slots()
+    {
+        // Arrange
+        var key = "testKey";
+
+        // Act
+        var lock1 = LockManager.GetLock(key, 3);
+        var lock2 = LockManager.GetLock(key, 3);
+
+        lock1.Dispose();
+        var available = LockManager.IsLockAvailable(key);
+        lock2.Dispose();
+
+        // Assert
+        Assert.True(available);
+    }
+
+    [Fact]
+    public void IsAvailable_Returns_False_If_Lock_Does_Not_Have_Free_Slots()
+    {
+        // Arrange
+        var key = "testKey";
+
+        // Act
+        var lock1 = LockManager.GetLock(key, 2);
+        var lock2 = LockManager.GetLock(key, 2);
+
+        var available = LockManager.IsLockAvailable(key);
+
+        lock1.Dispose();
+        lock2.Dispose();
+
+        // Assert
+        Assert.False(available);
+    }
+
+    [Fact]
     public async Task GetLockAsync_SameKey_ReturnsNotSameInstances_Of_Lock_Due_To_Self_Removal_When_ConcurrencyLevelIs_0()
     {
         // Arrange
