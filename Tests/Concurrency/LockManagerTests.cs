@@ -1,4 +1,6 @@
-﻿using IL.Misc.Concurrency;
+﻿using System.Diagnostics;
+using System.Reflection;
+using IL.Misc.Concurrency;
 using Xunit;
 
 namespace IL.Misc.Tests.Concurrency;
@@ -6,10 +8,10 @@ namespace IL.Misc.Tests.Concurrency;
 public class LockManagerTests
 {
     [Fact]
-    public void GetLock_SameKey_ReturnsNotSameInstances_Of_Lock_Due_To_Self_Removal_When_ConcurrencyLevelIs_0()
+    public void GetLock_SameKey_ReturnsSameInstances_Of_Lock_Due_To_Self_Removal_Delay_When_ConcurrencyLevelIs_0()
     {
         // Arrange
-        var key = "testKey";
+        var key = MethodBase.GetCurrentMethod()!.Name;
 
         // Act
         var lock1 = LockManager.GetLock(key);
@@ -18,14 +20,14 @@ public class LockManagerTests
         lock2.Dispose();
 
         // Assert
-        Assert.NotSame(lock1, lock2);
+        Assert.Same(lock1, lock2);
     }
 
     [Fact]
     public void IsAvailable_ReturnsTrue_If_Lock_Is_Missing()
     {
         // Arrange
-        var key = "testKey";
+        var key = MethodBase.GetCurrentMethod()!.Name;
 
         // Act
         var available = LockManager.IsLockAvailable(key);
@@ -38,7 +40,7 @@ public class LockManagerTests
     public void IsAvailable_ReturnsTrue_If_Lock_Has_Free_Slots()
     {
         // Arrange
-        var key = "testKey";
+        var key = MethodBase.GetCurrentMethod()!.Name;
 
         // Act
         var lock1 = LockManager.GetLock(key, 3);
@@ -56,7 +58,7 @@ public class LockManagerTests
     public void IsAvailable_Returns_False_If_Lock_Does_Not_Have_Free_Slots()
     {
         // Arrange
-        var key = "testKey";
+        var key = MethodBase.GetCurrentMethod()!.Name;
 
         // Act
         var lock1 = LockManager.GetLock(key, 2);
@@ -75,7 +77,7 @@ public class LockManagerTests
     public async Task GetLockAsync_SameKey_ReturnsNotSameInstances_Of_Lock_Due_To_Self_Removal_When_ConcurrencyLevelIs_0()
     {
         // Arrange
-        var key = "testKey";
+        var key = MethodBase.GetCurrentMethod()!.Name;
 
         // Act
         var lock1 = await LockManager.GetLockAsync(key);
@@ -84,15 +86,15 @@ public class LockManagerTests
         lock2.Dispose();
 
         // Assert
-        Assert.NotSame(lock1, lock2);
+        Assert.Same(lock1, lock2);
     }
 
     [Fact]
     public void GetLock_DifferentKeys_ReturnsDifferentInstances()
     {
         // Arrange
-        var key1 = "key1";
-        var key2 = "key2";
+        var key1 = MethodBase.GetCurrentMethod()!.Name + "1";
+        var key2 = MethodBase.GetCurrentMethod()!.Name + "2";
 
         // Act
         var lock1 = LockManager.GetLock(key1);
@@ -108,8 +110,8 @@ public class LockManagerTests
     public async Task GetLockAsync_DifferentKeys_ReturnsDifferentInstances()
     {
         // Arrange
-        var key1 = "key1";
-        var key2 = "key2";
+        var key1 = MethodBase.GetCurrentMethod()!.Name + "1";
+        var key2 = MethodBase.GetCurrentMethod()!.Name + "2";
 
         // Act
         var lock1 = await LockManager.GetLockAsync(key1);
@@ -125,7 +127,7 @@ public class LockManagerTests
     public void GetLock_Dispose_Releases_Lock_But_Allows_To_Reuse_It()
     {
         // Arrange
-        var key = "testKey";
+        var key = MethodBase.GetCurrentMethod()!.Name;
         IDisposable lockObj1;
         IDisposable lockObj2;
         int countInsideUsing1;
@@ -167,7 +169,7 @@ public class LockManagerTests
     public async Task GetLockAsync_Dispose_Releases_Lock_But_Allows_To_Reuse_It()
     {
         // Arrange
-        var key = "testKey";
+        var key = MethodBase.GetCurrentMethod()!.Name;
         IDisposable lockObj1;
         IDisposable lockObj2;
         int countInsideUsing1;
@@ -209,7 +211,7 @@ public class LockManagerTests
     public void GetLockAsync_SameKey_ReturnsSameInstances_Of_Lock_If_Other_Threads_Awaiting()
     {
         // Arrange
-        var key = "testKey";
+        var key = MethodBase.GetCurrentMethod()!.Name;
         IDisposable? lock1 = default;
         IDisposable? lock2 = default;
         IDisposable? lock3 = default;
@@ -240,19 +242,23 @@ public class LockManagerTests
             })
         };
 
+        var sv = new Stopwatch();
+        sv.Start();
         Task.WaitAll(tasks);
+        sv.Stop();
 
         // Assert
         Assert.Same(lock1, lock2);
         Assert.Same(lock1, lock3);
         Assert.Same(lock2, lock3);
+        Assert.InRange(sv.ElapsedMilliseconds, 300, long.MaxValue);
     }
 
     [Fact]
     public void GetLock_SameKey_ReturnsSameInstances_Of_Lock_If_Other_Threads_Awaiting()
     {
         // Arrange
-        var key = "testKey";
+        var key = MethodBase.GetCurrentMethod()!.Name;
         IDisposable? lock1 = default;
         IDisposable? lock2 = default;
         IDisposable? lock3 = default;
@@ -283,11 +289,15 @@ public class LockManagerTests
             })
         };
 
+        var sv = new Stopwatch();
+        sv.Start();
         Task.WaitAll(tasks);
+        sv.Stop();
 
         // Assert
         Assert.Same(lock1, lock2);
         Assert.Same(lock1, lock3);
         Assert.Same(lock2, lock3);
+        Assert.InRange(sv.ElapsedMilliseconds, 300, long.MaxValue);
     }
 }

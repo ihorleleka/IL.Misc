@@ -4,6 +4,7 @@ namespace IL.Misc.Concurrency;
 
 public static class LockManager
 {
+    private const int SelfDeletionDelayInMinutes = 1;
     private static readonly ConcurrentDictionary<string, Lazy<Lock>> Locks = new();
 
     /// <summary>
@@ -17,14 +18,16 @@ public static class LockManager
         return !lockExists || lockExists && concurrentLock!.Value.GetState() > 0;
     }
 
-    public static IDisposable GetLock(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
+    public static IDisposable GetLock(string key, int maxConcurrentCalls = 1,
+        CancellationToken cancellationToken = default)
     {
         var concurrentLock = AcquireLock(key, maxConcurrentCalls);
         concurrentLock.Wait(cancellationToken);
         return concurrentLock;
     }
 
-    public static async Task<IDisposable> GetLockAsync(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
+    public static async Task<IDisposable> GetLockAsync(string key, int maxConcurrentCalls = 1,
+        CancellationToken cancellationToken = default)
     {
         var concurrentLock = AcquireLock(key, maxConcurrentCalls);
         await concurrentLock.WaitAsync(cancellationToken);
@@ -33,13 +36,11 @@ public static class LockManager
 
     private static Lock AcquireLock(string key, int maxConcurrentCalls)
     {
-        var lazyLock = Locks.GetOrAdd(key,
-            new Lazy<Lock>(() => new Lock(maxConcurrentCalls,
-                () => { Locks.TryRemove(key, out _); })
+        return Locks
+            .GetOrAdd($"{key}{maxConcurrentCalls}",
+                new Lazy<Lock>(() => new Lock(maxConcurrentCalls, () => { Locks.TryRemove(key, out _); }), LazyThreadSafetyMode.ExecutionAndPublication)
             )
-        );
-        var concurrentLock = lazyLock.Value;
-        return concurrentLock;
+            .Value;
     }
 
     internal sealed class Lock : IDisposable
@@ -55,28 +56,30 @@ public static class LockManager
             _maxConcurrentCalls = maxConcurrentCalls;
         }
 
-        internal void Wait(CancellationToken cancellationToken)
-        {
-            _semaphoreSlim.Wait(cancellationToken);
-        }
+        internal void Wait(CancellationToken cancellationToken) => _semaphoreSlim.Wait(cancellationToken);
 
-        internal async Task WaitAsync(CancellationToken cancellationToken)
-        {
+        internal async Task WaitAsync(CancellationToken cancellationToken) =>
             await _semaphoreSlim.WaitAsync(cancellationToken);
-        }
 
         public void Dispose()
         {
             _semaphoreSlim.Release();
-            if (GetState() == _maxConcurrentCalls)
-            {
-                _selfDeletionAction?.Invoke();
-            }
+            Task
+                .Delay(TimeSpan.FromMinutes(SelfDeletionDelayInMinutes))
+                .ContinueWith(_ =>
+                {
+                    if (IsSemaphoreFreeAndAtItsMaxCapacity())
+                    {
+                        _selfDeletionAction?.Invoke();
+                    }
+                });
         }
 
-        internal int GetState()
+        private bool IsSemaphoreFreeAndAtItsMaxCapacity()
         {
-            return _semaphoreSlim.CurrentCount;
+            return GetState() == _maxConcurrentCalls;
         }
+
+        internal int GetState() => _semaphoreSlim.CurrentCount;
     }
 }
