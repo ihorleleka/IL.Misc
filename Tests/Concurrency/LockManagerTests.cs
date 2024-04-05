@@ -64,7 +64,7 @@ public class LockManagerTests
         var lock1 = LockManager.GetLock(key, 2);
         var lock2 = LockManager.GetLock(key, 2);
 
-        var available = LockManager.IsLockAvailable(key);
+        var available = LockManager.IsLockAvailable(key, 2);
 
         lock1.Dispose();
         lock2.Dispose();
@@ -141,7 +141,7 @@ public class LockManagerTests
             Assert.NotNull(lockObj1);
             countInsideUsing1 = ((LockManager.Lock)lockObj1).GetState();
 
-            using (lockObj2 = LockManager.GetLock(key))
+            using (lockObj2 = LockManager.GetLock(key, 2))
             {
                 // Assert
                 Assert.NotNull(lockObj2);
@@ -184,7 +184,7 @@ public class LockManagerTests
             countInsideUsing1 = ((LockManager.Lock)lockObj1).GetState();
 
 
-            using (lockObj2 = await LockManager.GetLockAsync(key))
+            using (lockObj2 = await LockManager.GetLockAsync(key, maxConcurrentCalls: 2))
             {
                 // Assert
                 Assert.NotNull(lockObj2);

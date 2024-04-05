@@ -9,25 +9,25 @@ public static class LockManager
 
     /// <summary>
     /// By availability it means Lock has any available slots on semaphore or not created at all.
+    /// Locks with different concurrency level with be created as different locks
     /// </summary>
     /// <param name="key"></param>
+    /// <param name="maxConcurrentCalls"></param>
     /// <returns></returns>
-    public static bool IsLockAvailable(string key)
+    public static bool IsLockAvailable(string key, int maxConcurrentCalls = 1)
     {
-        var lockExists = Locks.TryGetValue(key, out var concurrentLock);
+        var lockExists = Locks.TryGetValue($"{key}{maxConcurrentCalls}", out var concurrentLock);
         return !lockExists || lockExists && concurrentLock!.Value.GetState() > 0;
     }
 
-    public static IDisposable GetLock(string key, int maxConcurrentCalls = 1,
-        CancellationToken cancellationToken = default)
+    public static IDisposable GetLock(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
     {
         var concurrentLock = AcquireLock(key, maxConcurrentCalls);
         concurrentLock.Wait(cancellationToken);
         return concurrentLock;
     }
 
-    public static async Task<IDisposable> GetLockAsync(string key, int maxConcurrentCalls = 1,
-        CancellationToken cancellationToken = default)
+    public static async Task<IDisposable> GetLockAsync(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
     {
         var concurrentLock = AcquireLock(key, maxConcurrentCalls);
         await concurrentLock.WaitAsync(cancellationToken);
