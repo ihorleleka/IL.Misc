@@ -17,7 +17,7 @@ public static class LockManager
     public static bool IsLockAvailable(string key, int maxConcurrentCalls = 1)
     {
         var lockExists = Locks.TryGetValue($"{key}{maxConcurrentCalls}", out var concurrentLock);
-        return !lockExists || lockExists && concurrentLock!.Value.GetState() > 0;
+        return lockExists && concurrentLock!.Value.GetState() > 0;
     }
 
     public static IDisposable GetLock(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
