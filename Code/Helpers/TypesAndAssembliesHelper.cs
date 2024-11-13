@@ -9,7 +9,7 @@ public static class TypesAndAssembliesHelper
     public static Assembly[] GetAssemblies(params string[] assemblyFilters)
     {
         var assemblyNames = new HashSet<string>(assemblyFilters.Where(filter => !filter.Contains('*')));
-        var wildcardNames = assemblyFilters.Where(filter => filter.Contains('*')).ToArray();
+        var wildcardNames = assemblyFilters.Except(assemblyNames).ToArray();
 
         var allAssemblies = new HashSet<Assembly>();
         allAssemblies.UnionWith(
@@ -26,7 +26,7 @@ public static class TypesAndAssembliesHelper
         var assemblies = allAssemblies
             .Where(assembly =>
             {
-                if (!assemblyFilters.Any())
+                if (assemblyFilters.Length == 0)
                 {
                     return true;
                 }
@@ -59,7 +59,7 @@ public static class TypesAndAssembliesHelper
         catch (ReflectionTypeLoadException ex)
         {
             // Return the types that could be loaded. Types can contain null values.
-            return ex.Types.Where(type => type != null)!;
+            return ex.Types.Where(type => type != null);
         }
         catch (Exception ex)
         {

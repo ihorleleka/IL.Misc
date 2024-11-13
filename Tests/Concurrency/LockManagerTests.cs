@@ -242,16 +242,19 @@ public class LockManagerTests
             })
         };
 
-        var sv = new Stopwatch();
-        sv.Start();
+        var start = Stopwatch.GetTimestamp();
         Task.WaitAll(tasks);
-        sv.Stop();
+#if NET7_0_OR_GREATER
+        var elapsed = Stopwatch.GetElapsedTime(start);
+#else
+        var elapsed = new TimeSpan(Stopwatch.GetTimestamp() - start);
+#endif
 
         // Assert
         Assert.Same(lock1, lock2);
         Assert.Same(lock1, lock3);
         Assert.Same(lock2, lock3);
-        Assert.InRange(sv.ElapsedMilliseconds, 300, long.MaxValue);
+        Assert.InRange(elapsed.Milliseconds, 300, long.MaxValue);
     }
 
     [Fact]
@@ -289,15 +292,18 @@ public class LockManagerTests
             })
         };
 
-        var sv = new Stopwatch();
-        sv.Start();
+        var start = Stopwatch.GetTimestamp();
         Task.WaitAll(tasks);
-        sv.Stop();
+#if NET7_0_OR_GREATER
+        var elapsed = Stopwatch.GetElapsedTime(start);
+#else
+        var elapsed = new TimeSpan(Stopwatch.GetTimestamp() - start);
+#endif
 
         // Assert
         Assert.Same(lock1, lock2);
         Assert.Same(lock1, lock3);
         Assert.Same(lock2, lock3);
-        Assert.InRange(sv.ElapsedMilliseconds, 300, long.MaxValue);
+        Assert.InRange(elapsed.Milliseconds, 300, long.MaxValue);
     }
 }

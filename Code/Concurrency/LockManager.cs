@@ -8,7 +8,7 @@ public static class LockManager
     private static readonly ConcurrentDictionary<string, Lazy<Lock>> Locks = new();
 
     /// <summary>
-    /// By availability it means Lock has any available slots on semaphore or not created at all.
+    /// By availability, it means Lock has any available slots on semaphore or not created at all.
     /// Locks with different concurrency level with be created as different locks
     /// </summary>
     /// <param name="key"></param>
@@ -17,7 +17,7 @@ public static class LockManager
     public static bool IsLockAvailable(string key, int maxConcurrentCalls = 1)
     {
         var lockExists = Locks.TryGetValue($"{key}{maxConcurrentCalls}", out var concurrentLock);
-        return !lockExists || concurrentLock!.Value.GetState() > 0;
+        return !lockExists || concurrentLock?.Value.GetState() > 0;
     }
 
     public static IDisposable GetLock(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
@@ -48,6 +48,7 @@ public static class LockManager
         private readonly SemaphoreSlim _semaphoreSlim;
         private readonly Action? _selfDeletionAction;
         private readonly int _maxConcurrentCalls;
+        private bool _scheduledForDeletion;
 
         internal Lock(int maxConcurrentCalls = 1, Action? selfDeletionAction = null)
         {
@@ -56,26 +57,39 @@ public static class LockManager
             _maxConcurrentCalls = maxConcurrentCalls;
         }
 
-        internal void Wait(CancellationToken cancellationToken) => _semaphoreSlim.Wait(cancellationToken);
+        internal void Wait(CancellationToken cancellationToken)
+        {
+            _scheduledForDeletion = false;
+            _semaphoreSlim.Wait(cancellationToken);
+        }
 
-        internal async Task WaitAsync(CancellationToken cancellationToken) =>
+        internal async Task WaitAsync(CancellationToken cancellationToken)
+        {
+            _scheduledForDeletion = false;
             await _semaphoreSlim.WaitAsync(cancellationToken);
+        }
 
         public void Dispose()
         {
             _semaphoreSlim.Release();
+            if (!ReadyForDeletion() || _scheduledForDeletion)
+            {
+                return;
+            }
+
             Task
                 .Delay(TimeSpan.FromMinutes(SelfDeletionDelayInMinutes))
                 .ContinueWith(_ =>
                 {
-                    if (IsSemaphoreFreeAndAtItsMaxCapacity())
+                    if (_scheduledForDeletion && ReadyForDeletion())
                     {
                         _selfDeletionAction?.Invoke();
                     }
                 });
+            _scheduledForDeletion = true;
         }
 
-        private bool IsSemaphoreFreeAndAtItsMaxCapacity()
+        private bool ReadyForDeletion()
         {
             return GetState() == _maxConcurrentCalls;
         }
