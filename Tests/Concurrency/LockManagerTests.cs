@@ -7,6 +7,8 @@ namespace IL.Misc.Tests.Concurrency;
 
 public class LockManagerTests
 {
+    private const int TestDefaultDelay = 110;
+    private const int ExpectedElapsedAtLeast = 300;
     [Fact]
     public void GetLock_SameKey_ReturnsSameInstances_Of_Lock_Due_To_Self_Removal_Delay_When_ConcurrencyLevelIs_0()
     {
@@ -208,7 +210,7 @@ public class LockManagerTests
     }
 
     [Fact]
-    public void GetLockAsync_SameKey_ReturnsSameInstances_Of_Lock_If_Other_Threads_Awaiting()
+    public async Task GetLockAsync_SameKey_ReturnsSameInstances_Of_Lock_If_Other_Threads_Awaiting()
     {
         // Arrange
         var key = MethodBase.GetCurrentMethod()!.Name;
@@ -219,91 +221,107 @@ public class LockManagerTests
         // Act
         var tasks = new[]
         {
-            Task.Run(async () =>
-            {
-                using (lock1 = await LockManager.GetLockAsync(key))
-                {
-                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
-                }
-            }),
-            Task.Run(async () =>
-            {
-                using (lock2 = await LockManager.GetLockAsync(key))
-                {
-                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
-                }
-            }),
-            Task.Run(async () =>
-            {
-                using (lock3 = await LockManager.GetLockAsync(key))
-                {
-                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
-                }
-            })
-        };
-
-        var start = Stopwatch.GetTimestamp();
-        Task.WaitAll(tasks);
-#if NET7_0_OR_GREATER
-        var elapsed = Stopwatch.GetElapsedTime(start);
-#else
-        var elapsed = new TimeSpan(Stopwatch.GetTimestamp() - start);
-#endif
-
-        // Assert
-        Assert.Same(lock1, lock2);
-        Assert.Same(lock1, lock3);
-        Assert.Same(lock2, lock3);
-        Assert.InRange(elapsed.Milliseconds, 300, long.MaxValue);
-    }
-
-    [Fact]
-    public void GetLock_SameKey_ReturnsSameInstances_Of_Lock_If_Other_Threads_Awaiting()
-    {
-        // Arrange
-        var key = MethodBase.GetCurrentMethod()!.Name;
-        IDisposable? lock1 = default;
-        IDisposable? lock2 = default;
-        IDisposable? lock3 = default;
-
-        // Act
-        var tasks = new[]
-        {
-            Task.Run(() =>
+            new Task(() =>
             {
                 using (lock1 = LockManager.GetLock(key))
                 {
-                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
+                    Task.Delay(TestDefaultDelay).Wait();
                 }
             }),
-            Task.Run(() =>
+            new Task(() =>
             {
                 using (lock2 = LockManager.GetLock(key))
                 {
-                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
+                    Task.Delay(TestDefaultDelay).Wait();
                 }
             }),
-            Task.Run(() =>
+            new Task(() =>
             {
                 using (lock3 = LockManager.GetLock(key))
                 {
-                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
+                    Task.Delay(TestDefaultDelay).Wait();
                 }
             })
         };
 
-        var start = Stopwatch.GetTimestamp();
-        Task.WaitAll(tasks);
 #if NET7_0_OR_GREATER
-        var elapsed = Stopwatch.GetElapsedTime(start);
+        var start = Stopwatch.GetTimestamp();
 #else
-        var elapsed = new TimeSpan(Stopwatch.GetTimestamp() - start);
+        var start = Stopwatch.StartNew();
+#endif
+        foreach (var task in tasks)
+        {
+            task.Start();
+        }
+        await Task.WhenAll(tasks);
+#if NET7_0_OR_GREATER
+        var elapsed = Stopwatch.GetElapsedTime(start).Milliseconds;
+#else
+        var elapsed = start.ElapsedMilliseconds;
 #endif
 
         // Assert
         Assert.Same(lock1, lock2);
         Assert.Same(lock1, lock3);
         Assert.Same(lock2, lock3);
-        Assert.InRange(elapsed.Milliseconds, 300, long.MaxValue);
+        Assert.InRange(elapsed, ExpectedElapsedAtLeast, long.MaxValue);
+    }
+
+    [Fact]
+    public async Task GetLock_SameKey_ReturnsSameInstances_Of_Lock_If_Other_Threads_Awaiting()
+    {
+        // Arrange
+        var key = MethodBase.GetCurrentMethod()!.Name;
+        IDisposable? lock1 = default;
+        IDisposable? lock2 = default;
+        IDisposable? lock3 = default;
+
+        // Act
+        var tasks = new[]
+        {
+            new Task(() =>
+            {
+                using (lock1 = LockManager.GetLock(key))
+                {
+                    Task.Delay(TestDefaultDelay).Wait();
+                }
+            }),
+            new Task(() =>
+            {
+                using (lock2 = LockManager.GetLock(key))
+                {
+                    Task.Delay(TestDefaultDelay).Wait();
+                }
+            }),
+            new Task(() =>
+            {
+                using (lock3 = LockManager.GetLock(key))
+                {
+                    Task.Delay(TestDefaultDelay).Wait();
+                }
+            })
+        };
+
+#if NET7_0_OR_GREATER
+        var start = Stopwatch.GetTimestamp();
+#else
+        var start = Stopwatch.StartNew();
+#endif
+        foreach (var task in tasks)
+        {
+            task.Start();
+        }
+        await Task.WhenAll(tasks);
+#if NET7_0_OR_GREATER
+        var elapsed = Stopwatch.GetElapsedTime(start).Milliseconds;
+#else
+        var elapsed = start.ElapsedMilliseconds;
+#endif
+
+        // Assert
+        Assert.Same(lock1, lock2);
+        Assert.Same(lock1, lock3);
+        Assert.Same(lock2, lock3);
+        Assert.InRange(elapsed, ExpectedElapsedAtLeast, long.MaxValue);
     }
 }
