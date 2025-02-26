@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Reflection;
-using System.Text.RegularExpressions;
 
 namespace IL.Misc.Helpers;
 
@@ -32,7 +31,7 @@ public static class TypesAndAssembliesHelper
                 }
 
                 var nameToMatch = assembly.GetName().Name!;
-                return assemblyNames.Contains(nameToMatch) || wildcardNames.Any(wildcard => IsWildcardMatch(nameToMatch, wildcard));
+                return assemblyNames.Contains(nameToMatch) || wildcardNames.Any(wildcard => nameToMatch.MatchesWildcard(wildcard));
             })
             .ToArray();
 
@@ -66,13 +65,5 @@ public static class TypesAndAssembliesHelper
             // Throw a more descriptive message containing the name of the assembly.
             throw new InvalidOperationException(string.Format(CultureInfo.InvariantCulture, "Unable to load types from assembly {0}. {1}", assembly.FullName, ex.Message), ex);
         }
-    }
-
-    /// <summary>
-    ///     Checks if a string matches a wildcard argument (using regex)
-    /// </summary>
-    private static bool IsWildcardMatch(string input, string wildcard)
-    {
-        return input == wildcard || Regex.IsMatch(input, $"^{Regex.Escape(wildcard).Replace("\\*", ".*").Replace("\\?", ".")}$", RegexOptions.IgnoreCase);
     }
 }
