@@ -58,12 +58,14 @@ public static class TypesAndAssembliesHelper
         catch (ReflectionTypeLoadException ex)
         {
             // Return the types that could be loaded. Types can contain null values.
-            return ex.Types.Where(type => type != null);
+            //return ex.Types.Where(type => type != null);
+            return Type.EmptyTypes;
         }
         catch (Exception ex)
         {
             // Throw a more descriptive message containing the name of the assembly.
-            throw new InvalidOperationException(string.Format(CultureInfo.InvariantCulture, "Unable to load types from assembly {0}. {1}", assembly.FullName, ex.Message), ex);
+            //throw new InvalidOperationException(string.Format(CultureInfo.InvariantCulture, "Unable to load types from assembly {0}. {1}", assembly.FullName, ex.Message), ex);
+            return Type.EmptyTypes;
         }
     }
 }
