@@ -14,6 +14,19 @@ public static class AmbientScopeService
         CurrentScope.Value?.ServiceProvider
         ?? throw new InvalidOperationException("No active service scope.");
 
+
+    /// <summary>
+    /// Creates a reusable token that can re-enter this scope later.
+    /// </summary>
+    public static AmbientScopeToken CreateToken(IServiceScope scope) => new(scope);
+    
+    
+    /// <summary>
+    /// Creates a reusable token that can re-enter this scope later.
+    /// </summary>
+    /// <param name="scopedServiceProvider">Must be scoped service provider, otherwise system will throw an exception.</param>
+    public static AmbientScopeToken CreateToken(IServiceProvider scopedServiceProvider) => new(scopedServiceProvider);
+
     /// <summary>
     /// Temporarily pushes a new service scope into the ambient context.
     /// </summary>
@@ -23,11 +36,6 @@ public static class AmbientScopeService
         CurrentScope.Value = scope;
         return new ScopeReset(previous, scope);
     }
-
-    /// <summary>
-    /// Creates a reusable token that can re-enter this scope later.
-    /// </summary>
-    public static AmbientScopeToken CreateToken(IServiceScope scope) => new(scope);
 
     private sealed class ScopeReset : IAmbientScopeEntry
     {
@@ -94,6 +102,11 @@ public static class AmbientScopeService
         {
             _scope = scope;
         }
+        
+        internal AmbientScopeToken(IServiceProvider scopedServiceProvider)
+        {
+            _scope = new ExistingScopedServiceProviderScopeWrapper(scopedServiceProvider);
+        }
 
         /// <summary>
         /// Enters the ambient scope.
@@ -139,6 +152,37 @@ public static class AmbientScopeService
             {
                 _scope.Dispose();
             }
+        }
+        
+        
+
+        private sealed class ExistingScopedServiceProviderScopeWrapper : IServiceScope, IAsyncDisposable
+        {
+            public ExistingScopedServiceProviderScopeWrapper(IServiceProvider serviceProvider)
+            {
+                ArgumentNullException.ThrowIfNull(serviceProvider);
+
+                // Defensive check — ensures this isn't the root provider.
+                // Root providers don't have an IServiceScopeFactory that resolves back to themselves.
+                var factory = serviceProvider.GetService<IServiceScopeFactory>();
+                if (factory == null)
+                {
+                    throw new InvalidOperationException("The provided IServiceProvider does not appear to be a scoped provider.");
+                }
+
+                ServiceProvider = serviceProvider;
+            }
+
+            public IServiceProvider ServiceProvider { get; }
+
+            /// <inheritdoc />
+            public void Dispose()
+            {
+                // Do nothing — we don't own this scope.
+            }
+
+            /// <inheritdoc />
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
 
         /// <summary>
