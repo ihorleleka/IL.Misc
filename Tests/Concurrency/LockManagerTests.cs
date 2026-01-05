@@ -255,7 +255,7 @@ public class LockManagerTests
         }
         await Task.WhenAll(tasks);
 #if NET7_0_OR_GREATER
-        var elapsed = Stopwatch.GetElapsedTime(start).Milliseconds;
+        var elapsed = (long)Stopwatch.GetElapsedTime(start).TotalMilliseconds;
 #else
         var elapsed = start.ElapsedMilliseconds;
 #endif
@@ -313,7 +313,7 @@ public class LockManagerTests
         }
         await Task.WhenAll(tasks);
 #if NET7_0_OR_GREATER
-        var elapsed = Stopwatch.GetElapsedTime(start).Milliseconds;
+        var elapsed = (long)Stopwatch.GetElapsedTime(start).TotalMilliseconds;
 #else
         var elapsed = start.ElapsedMilliseconds;
 #endif
