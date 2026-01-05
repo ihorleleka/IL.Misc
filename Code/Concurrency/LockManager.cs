@@ -36,9 +36,10 @@ public static class LockManager
 
     private static Lock AcquireLock(string key, int maxConcurrentCalls)
     {
+        var dictionaryKey = $"{key}{maxConcurrentCalls}";
         return Locks
-            .GetOrAdd($"{key}{maxConcurrentCalls}",
-                new Lazy<Lock>(() => new Lock(maxConcurrentCalls, () => { Locks.TryRemove(key, out _); }), LazyThreadSafetyMode.ExecutionAndPublication)
+            .GetOrAdd(dictionaryKey,
+                new Lazy<Lock>(() => new Lock(maxConcurrentCalls, () => { Locks.TryRemove(dictionaryKey, out _); }), LazyThreadSafetyMode.ExecutionAndPublication)
             )
             .Value;
     }
