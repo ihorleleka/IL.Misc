@@ -16,13 +16,13 @@ public class LockManagerTests
         var key = MethodBase.GetCurrentMethod()!.Name;
 
         // Act
-        var lock1 = LockManager.GetLock(key);
+        var lock1 = (LockManager.LockReleaser)LockManager.GetLock(key);
         lock1.Dispose();
-        var lock2 = LockManager.GetLock(key);
+        var lock2 = (LockManager.LockReleaser)LockManager.GetLock(key);
         lock2.Dispose();
 
         // Assert
-        Assert.Same(lock1, lock2);
+        Assert.Same(lock1.InternalLock, lock2.InternalLock);
     }
 
     [Fact]
@@ -76,19 +76,19 @@ public class LockManagerTests
     }
 
     [Fact]
-    public async Task GetLockAsync_SameKey_ReturnsNotSameInstances_Of_Lock_Due_To_Self_Removal_When_ConcurrencyLevelIs_0()
+    public async Task GetLockAsync_SameKey_ReturnsSameInstances_Of_Lock_Due_To_Self_Removal_Delay_When_ConcurrencyLevelIs_0()
     {
         // Arrange
         var key = MethodBase.GetCurrentMethod()!.Name;
 
         // Act
-        var lock1 = await LockManager.GetLockAsync(key);
+        var lock1 = (LockManager.LockReleaser)await LockManager.GetLockAsync(key);
         lock1.Dispose();
-        var lock2 = await LockManager.GetLockAsync(key);
+        var lock2 = (LockManager.LockReleaser)await LockManager.GetLockAsync(key);
         lock2.Dispose();
 
         // Assert
-        Assert.Same(lock1, lock2);
+        Assert.Same(lock1.InternalLock, lock2.InternalLock);
     }
 
     [Fact]
@@ -99,13 +99,13 @@ public class LockManagerTests
         var key2 = MethodBase.GetCurrentMethod()!.Name + "2";
 
         // Act
-        var lock1 = LockManager.GetLock(key1);
+        var lock1 = (LockManager.LockReleaser)LockManager.GetLock(key1);
         lock1.Dispose();
-        var lock2 = LockManager.GetLock(key2);
+        var lock2 = (LockManager.LockReleaser)LockManager.GetLock(key2);
         lock2.Dispose();
 
         // Assert
-        Assert.NotSame(lock1, lock2);
+        Assert.NotSame(lock1.InternalLock, lock2.InternalLock);
     }
 
     [Fact]
@@ -116,13 +116,13 @@ public class LockManagerTests
         var key2 = MethodBase.GetCurrentMethod()!.Name + "2";
 
         // Act
-        var lock1 = await LockManager.GetLockAsync(key1);
+        var lock1 = (LockManager.LockReleaser)await LockManager.GetLockAsync(key1);
         lock1.Dispose();
-        var lock2 = await LockManager.GetLockAsync(key2);
+        var lock2 = (LockManager.LockReleaser)await LockManager.GetLockAsync(key2);
         lock2.Dispose();
 
         // Assert
-        Assert.NotSame(lock1, lock2);
+        Assert.NotSame(lock1.InternalLock, lock2.InternalLock);
     }
 
     [Fact]
@@ -130,32 +130,32 @@ public class LockManagerTests
     {
         // Arrange
         var key = MethodBase.GetCurrentMethod()!.Name;
-        IDisposable lockObj1;
-        IDisposable lockObj2;
+        LockManager.LockReleaser lockObj1;
+        LockManager.LockReleaser lockObj2;
         int countInsideUsing1;
         int countOutsideUsing1;
         int countInsideUsing2;
         int countOutsideUsing2;
         // Act
-        using (lockObj1 = LockManager.GetLock(key, 2))
+        using (lockObj1 = (LockManager.LockReleaser)LockManager.GetLock(key, 2))
         {
             // Assert
             Assert.NotNull(lockObj1);
-            countInsideUsing1 = ((LockManager.Lock)lockObj1).GetState();
+            countInsideUsing1 = lockObj1.InternalLock.GetState();
 
-            using (lockObj2 = LockManager.GetLock(key, 2))
+            using (lockObj2 = (LockManager.LockReleaser)LockManager.GetLock(key, 2))
             {
                 // Assert
                 Assert.NotNull(lockObj2);
-                countInsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
+                countInsideUsing2 = lockObj2.InternalLock.GetState();
             }
 
             // Lock should be disposed at this point
-            countOutsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
+            countOutsideUsing2 = lockObj2.InternalLock.GetState();
         }
 
         // Lock should be disposed at this point
-        countOutsideUsing1 = ((LockManager.Lock)lockObj1).GetState();
+        countOutsideUsing1 = lockObj1.InternalLock.GetState();
 
 
         // Act & Assert
@@ -164,7 +164,7 @@ public class LockManagerTests
 
         Assert.Equal(countInsideUsing1, countOutsideUsing2);
 
-        Assert.Same(lockObj1, lockObj2);
+        Assert.Same(lockObj1.InternalLock, lockObj2.InternalLock);
     }
 
     [Fact]
@@ -172,33 +172,33 @@ public class LockManagerTests
     {
         // Arrange
         var key = MethodBase.GetCurrentMethod()!.Name;
-        IDisposable lockObj1;
-        IDisposable lockObj2;
+        LockManager.LockReleaser lockObj1;
+        LockManager.LockReleaser lockObj2;
         int countInsideUsing1;
         int countOutsideUsing1;
         int countInsideUsing2;
         int countOutsideUsing2;
         // Act
-        using (lockObj1 = await LockManager.GetLockAsync(key, 2))
+        using (lockObj1 = (LockManager.LockReleaser)await LockManager.GetLockAsync(key, 2))
         {
             // Assert
             Assert.NotNull(lockObj1);
-            countInsideUsing1 = ((LockManager.Lock)lockObj1).GetState();
+            countInsideUsing1 = lockObj1.InternalLock.GetState();
 
 
-            using (lockObj2 = await LockManager.GetLockAsync(key, maxConcurrentCalls: 2))
+            using (lockObj2 = (LockManager.LockReleaser)await LockManager.GetLockAsync(key, maxConcurrentCalls: 2))
             {
                 // Assert
                 Assert.NotNull(lockObj2);
-                countInsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
+                countInsideUsing2 = lockObj2.InternalLock.GetState();
             }
 
             // Lock should be disposed at this point
-            countOutsideUsing2 = ((LockManager.Lock)lockObj2).GetState();
+            countOutsideUsing2 = lockObj2.InternalLock.GetState();
         }
 
         // Lock should be disposed at this point
-        countOutsideUsing1 = ((LockManager.Lock)lockObj1).GetState();
+        countOutsideUsing1 = lockObj1.InternalLock.GetState();
 
         // Act & Assert
         Assert.NotEqual(countInsideUsing1, countOutsideUsing1);
@@ -206,7 +206,7 @@ public class LockManagerTests
 
         Assert.Equal(countInsideUsing1, countOutsideUsing2);
 
-        Assert.Same(lockObj1, lockObj2);
+        Assert.Same(lockObj1.InternalLock, lockObj2.InternalLock);
     }
 
     [Fact]
@@ -214,30 +214,30 @@ public class LockManagerTests
     {
         // Arrange
         var key = MethodBase.GetCurrentMethod()!.Name;
-        IDisposable? lock1 = default;
-        IDisposable? lock2 = default;
-        IDisposable? lock3 = default;
+        LockManager.LockReleaser? lock1 = default;
+        LockManager.LockReleaser? lock2 = default;
+        LockManager.LockReleaser? lock3 = default;
 
         // Act
         var tasks = new[]
         {
             new Task(() =>
             {
-                using (lock1 = LockManager.GetLock(key))
+                using (lock1 = (LockManager.LockReleaser)LockManager.GetLock(key))
                 {
                     Task.Delay(TestDefaultDelay).Wait();
                 }
             }),
             new Task(() =>
             {
-                using (lock2 = LockManager.GetLock(key))
+                using (lock2 = (LockManager.LockReleaser)LockManager.GetLock(key))
                 {
                     Task.Delay(TestDefaultDelay).Wait();
                 }
             }),
             new Task(() =>
             {
-                using (lock3 = LockManager.GetLock(key))
+                using (lock3 = (LockManager.LockReleaser)LockManager.GetLock(key))
                 {
                     Task.Delay(TestDefaultDelay).Wait();
                 }
@@ -261,9 +261,9 @@ public class LockManagerTests
 #endif
 
         // Assert
-        Assert.Same(lock1, lock2);
-        Assert.Same(lock1, lock3);
-        Assert.Same(lock2, lock3);
+        Assert.Same(lock1!.InternalLock, lock2!.InternalLock);
+        Assert.Same(lock1.InternalLock, lock3!.InternalLock);
+        Assert.Same(lock2.InternalLock, lock3.InternalLock);
         Assert.InRange(elapsed, ExpectedElapsedAtLeast, long.MaxValue);
     }
 
@@ -272,30 +272,30 @@ public class LockManagerTests
     {
         // Arrange
         var key = MethodBase.GetCurrentMethod()!.Name;
-        IDisposable? lock1 = default;
-        IDisposable? lock2 = default;
-        IDisposable? lock3 = default;
+        LockManager.LockReleaser? lock1 = default;
+        LockManager.LockReleaser? lock2 = default;
+        LockManager.LockReleaser? lock3 = default;
 
         // Act
         var tasks = new[]
         {
             new Task(() =>
             {
-                using (lock1 = LockManager.GetLock(key))
+                using (lock1 = (LockManager.LockReleaser)LockManager.GetLock(key))
                 {
                     Task.Delay(TestDefaultDelay).Wait();
                 }
             }),
             new Task(() =>
             {
-                using (lock2 = LockManager.GetLock(key))
+                using (lock2 = (LockManager.LockReleaser)LockManager.GetLock(key))
                 {
                     Task.Delay(TestDefaultDelay).Wait();
                 }
             }),
             new Task(() =>
             {
-                using (lock3 = LockManager.GetLock(key))
+                using (lock3 = (LockManager.LockReleaser)LockManager.GetLock(key))
                 {
                     Task.Delay(TestDefaultDelay).Wait();
                 }
@@ -319,9 +319,9 @@ public class LockManagerTests
 #endif
 
         // Assert
-        Assert.Same(lock1, lock2);
-        Assert.Same(lock1, lock3);
-        Assert.Same(lock2, lock3);
+        Assert.Same(lock1!.InternalLock, lock2!.InternalLock);
+        Assert.Same(lock1.InternalLock, lock3!.InternalLock);
+        Assert.Same(lock2.InternalLock, lock3.InternalLock);
         Assert.InRange(elapsed, ExpectedElapsedAtLeast, long.MaxValue);
     }
 }

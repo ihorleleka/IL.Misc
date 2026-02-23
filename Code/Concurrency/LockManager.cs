@@ -24,14 +24,14 @@ public static class LockManager
     {
         var concurrentLock = AcquireLock(key, maxConcurrentCalls);
         concurrentLock.Wait(cancellationToken);
-        return concurrentLock;
+        return new LockReleaser(concurrentLock);
     }
 
     public static async Task<IDisposable> GetLockAsync(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
     {
         var concurrentLock = AcquireLock(key, maxConcurrentCalls);
         await concurrentLock.WaitAsync(cancellationToken);
-        return concurrentLock;
+        return new LockReleaser(concurrentLock);
     }
 
     private static Lock AcquireLock(string key, int maxConcurrentCalls)
@@ -39,60 +39,115 @@ public static class LockManager
         var dictionaryKey = $"{key}{maxConcurrentCalls}";
         return Locks
             .GetOrAdd(dictionaryKey,
-                new Lazy<Lock>(() => new Lock(maxConcurrentCalls, () => { Locks.TryRemove(dictionaryKey, out _); }), LazyThreadSafetyMode.ExecutionAndPublication)
+                k => new Lazy<Lock>(() => new Lock(maxConcurrentCalls, () => { Locks.TryRemove(k, out _); }), LazyThreadSafetyMode.ExecutionAndPublication)
             )
             .Value;
     }
 
-    internal sealed class Lock : IDisposable
+    internal sealed class LockReleaser : IDisposable
+    {
+        private Lock? _lock;
+
+        internal LockReleaser(Lock l)
+        {
+            _lock = l;
+            InternalLock = l;
+        }
+        internal Lock InternalLock { get; }
+
+        public void Dispose()
+        {
+            var l = Interlocked.Exchange(ref _lock, null);
+            l?.Release();
+        }
+    }
+
+    internal sealed class Lock
     {
         private readonly SemaphoreSlim _semaphoreSlim;
         private readonly Action? _selfDeletionAction;
-        private readonly int _maxConcurrentCalls;
+        private int _activeCount;
         private bool _scheduledForDeletion;
 
         internal Lock(int maxConcurrentCalls = 1, Action? selfDeletionAction = null)
         {
             _semaphoreSlim = new SemaphoreSlim(maxConcurrentCalls, maxConcurrentCalls);
             _selfDeletionAction = selfDeletionAction;
-            _maxConcurrentCalls = maxConcurrentCalls;
         }
 
         internal void Wait(CancellationToken cancellationToken)
         {
-            _scheduledForDeletion = false;
-            _semaphoreSlim.Wait(cancellationToken);
+            Interlocked.Increment(ref _activeCount);
+            try
+            {
+                _semaphoreSlim.Wait(cancellationToken);
+            }
+            catch
+            {
+                Interlocked.Decrement(ref _activeCount);
+                throw;
+            }
         }
 
         internal async Task WaitAsync(CancellationToken cancellationToken)
         {
-            _scheduledForDeletion = false;
-            await _semaphoreSlim.WaitAsync(cancellationToken);
+            Interlocked.Increment(ref _activeCount);
+            try
+            {
+                await _semaphoreSlim.WaitAsync(cancellationToken);
+            }
+            catch
+            {
+                Interlocked.Decrement(ref _activeCount);
+                throw;
+            }
         }
 
-        public void Dispose()
+        internal void Release()
         {
             _semaphoreSlim.Release();
-            if (!ReadyForDeletion() || _scheduledForDeletion)
+            if (Interlocked.Decrement(ref _activeCount) == 0)
             {
-                return;
+                ScheduleEviction();
+            }
+        }
+
+        private void ScheduleEviction()
+        {
+            lock (this)
+            {
+                if (_scheduledForDeletion)
+                {
+                    return;
+                }
+                _scheduledForDeletion = true;
             }
 
             Task
                 .Delay(TimeSpan.FromMinutes(SelfDeletionDelayInMinutes))
                 .ContinueWith(_ =>
                 {
-                    if (_scheduledForDeletion && ReadyForDeletion())
+                    var shouldEvict = false;
+                    lock (this)
                     {
-                        _selfDeletionAction?.Invoke();
+                        if (_scheduledForDeletion && Volatile.Read(ref _activeCount) == 0)
+                        {
+                            shouldEvict = true;
+                        }
+                        else
+                        {
+                            _scheduledForDeletion = false;
+                        }
                     }
-                });
-            _scheduledForDeletion = true;
-        }
 
-        private bool ReadyForDeletion()
-        {
-            return GetState() == _maxConcurrentCalls;
+                    if (!shouldEvict)
+                    {
+                        return;
+                    }
+
+                    _selfDeletionAction?.Invoke();
+                    _semaphoreSlim.Dispose();
+                });
         }
 
         internal int GetState() => _semaphoreSlim.CurrentCount;
