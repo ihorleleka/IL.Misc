@@ -1,99 +1,89 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace IL.Misc.Scopes;
 
+/// <summary>
+/// Represents an active ambient scope lease.
+/// </summary>
 public interface IAmbientScopeEntry : IDisposable, IAsyncDisposable
 {
 }
 
+/// <summary>
+/// Represents a reusable token that can enter an ambient scope.
+/// </summary>
+public interface IAmbientScopeToken : IDisposable, IAsyncDisposable
+{
+    /// <summary>
+    /// Enters the ambient scope and returns a lease that restores the previous scope on exit.
+    /// </summary>
+    /// <param name="mode">
+    /// Controls whether the underlying scope is disposed when the returned lease exits.
+    /// </param>
+    /// <returns>
+    /// An active ambient scope lease that must be disposed to restore the previous ambient scope.
+    /// </returns>
+    IAmbientScopeEntry Enter(AmbientScopeEnterMode mode = AmbientScopeEnterMode.DisposeOnExit);
+}
+
+/// <summary>
+/// Controls whether the entered scope is disposed when the ambient lease exits.
+/// </summary>
+public enum AmbientScopeEnterMode
+{
+    /// <summary>
+    /// Dispose the underlying scope when the ambient lease exits.
+    /// </summary>
+    DisposeOnExit,
+
+    /// <summary>
+    /// Restore the previous ambient scope without disposing the underlying scope.
+    /// </summary>
+    Reusable
+}
+
+/// <summary>
+/// Provides ambient access to the current service scope.
+/// </summary>
 public static class AmbientScopeService
 {
     private static readonly AsyncLocal<IServiceScope?> CurrentScope = new();
 
+    /// <summary>
+    /// Gets the currently active ambient service provider.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no ambient scope is currently active.
+    /// </exception>
     public static IServiceProvider CurrentServiceProvider =>
         CurrentScope.Value?.ServiceProvider
         ?? throw new InvalidOperationException("No active service scope.");
 
-
     /// <summary>
-    /// Creates a reusable token that can re-enter this scope later.
+    /// Creates a reusable token that can re-enter the specified scope later.
     /// </summary>
+    /// <param name="scope">The scope to expose through the ambient context.</param>
+    /// <returns>A token that can enter the provided scope multiple times.</returns>
     public static AmbientScopeToken CreateToken(IServiceScope scope) => new(scope);
-    
-    
+
     /// <summary>
-    /// Creates a reusable token that can re-enter this scope later.
+    /// Creates a reusable token that can re-enter an existing scoped provider later.
     /// </summary>
-    /// <param name="scopedServiceProvider">Must be scoped service provider, otherwise system will throw an exception.</param>
+    /// <param name="scopedServiceProvider">
+    /// An existing scoped service provider whose lifetime is owned elsewhere.
+    /// </param>
+    /// <returns>A token that can enter the provided scoped service provider multiple times.</returns>
+    /// <remarks>
+    /// Prefer <see cref="CreateToken(IServiceScope)"/> when possible.
+    /// This overload does not own the provider lifetime and relies on the caller to pass an already-scoped provider.
+    /// Detection of root versus scoped providers is container-dependent and cannot be guaranteed for every DI implementation.
+    /// </remarks>
     public static AmbientScopeToken CreateToken(IServiceProvider scopedServiceProvider) => new(scopedServiceProvider);
-
-    /// <summary>
-    /// Temporarily pushes a new service scope into the ambient context.
-    /// </summary>
-    private static ScopeReset Push(IServiceScope scope)
-    {
-        var previous = CurrentScope.Value;
-        CurrentScope.Value = scope;
-        return new ScopeReset(previous, scope);
-    }
-
-    private sealed class ScopeReset : IAmbientScopeEntry
-    {
-        private bool _disposed;
-        private readonly IServiceScope? _previous;
-        private readonly IServiceScope _current;
-
-        public ScopeReset(IServiceScope? previous, IServiceScope current)
-        {
-            _previous = previous;
-            _current = current;
-        }
-
-        public void Dispose()
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            CurrentScope.Value = _previous;
-            _current.Dispose();
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            CurrentScope.Value = _previous;
-
-            if (_current is IAsyncDisposable asyncDisposable)
-            {
-                await asyncDisposable.DisposeAsync();
-            }
-            else
-            {
-                _current.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// Resets current ambient scope without disposing actual scoped services object.
-        /// </summary>
-        public void CurrentScopeResetOnly()
-        {
-            CurrentScope.Value = _previous;
-        }
-    }
 
     /// <summary>
     /// A reusable token that allows re-entering the same service scope.
     /// </summary>
-    public sealed class AmbientScopeToken : IAmbientScopeEntry
+    public sealed class AmbientScopeToken : IAmbientScopeToken
     {
         private readonly IServiceScope _scope;
         private bool _disposed;
@@ -102,7 +92,7 @@ public static class AmbientScopeService
         {
             _scope = scope;
         }
-        
+
         internal AmbientScopeToken(IServiceProvider scopedServiceProvider)
         {
             _scope = new ExistingScopedServiceProviderScopeWrapper(scopedServiceProvider);
@@ -110,20 +100,34 @@ public static class AmbientScopeService
 
         /// <summary>
         /// Enters the ambient scope.
-        /// By default, the scope will be disposed when the returned object is disposed.
-        /// Pass <paramref name="reusable"/> = true to keep the scope alive for reuse.
         /// </summary>
-        public IAmbientScopeEntry Enter(bool reusable = false)
+        /// <param name="mode">
+        /// Controls whether the underlying scope is disposed when the returned lease exits.
+        /// </param>
+        /// <returns>
+        /// An active lease that restores the previous ambient scope when disposed.
+        /// </returns>
+        /// <exception cref="ObjectDisposedException">
+        /// Thrown when the token has already been disposed.
+        /// </exception>
+        public IAmbientScopeEntry Enter(AmbientScopeEnterMode mode = AmbientScopeEnterMode.DisposeOnExit)
         {
-            var reset = Push(_scope);
+            ObjectDisposedException.ThrowIf(_disposed, this);
 
-            return reusable
-                ? new ReusableEntry(reset) // only reset AsyncLocal, do NOT dispose scope
-                : new AutoDisposeWrapper(this, reset); // reset + dispose scope at end
+            return new AmbientScopeLease(CurrentScope.Value, _scope, disposeScopeOnExit: mode == AmbientScopeEnterMode.DisposeOnExit);
         }
 
+        /// <summary>
+        /// Gets the scope wrapped by this token.
+        /// </summary>
         public IServiceScope Scope => _scope;
 
+        /// <summary>
+        /// Disposes the underlying scope owned by this token.
+        /// </summary>
+        /// <remarks>
+        /// If this token was created from <see cref="CreateToken(IServiceProvider)"/>, dispose is a no-op for the wrapped provider lifetime.
+        /// </remarks>
         public void Dispose()
         {
             if (_disposed)
@@ -135,6 +139,12 @@ public static class AmbientScopeService
             _scope.Dispose();
         }
 
+        /// <summary>
+        /// Asynchronously disposes the underlying scope owned by this token.
+        /// </summary>
+        /// <remarks>
+        /// If this token was created from <see cref="CreateToken(IServiceProvider)"/>, asynchronous disposal is a no-op for the wrapped provider lifetime.
+        /// </remarks>
         public async ValueTask DisposeAsync()
         {
             if (_disposed)
@@ -153,8 +163,6 @@ public static class AmbientScopeService
                 _scope.Dispose();
             }
         }
-        
-        
 
         private sealed class ExistingScopedServiceProviderScopeWrapper : IServiceScope, IAsyncDisposable
         {
@@ -162,8 +170,6 @@ public static class AmbientScopeService
             {
                 ArgumentNullException.ThrowIfNull(serviceProvider);
 
-                // Defensive check — ensures this isn't the root provider.
-                // Root providers don't have an IServiceScopeFactory that resolves back to themselves.
                 var factory = serviceProvider.GetService<IServiceScopeFactory>();
                 if (factory == null)
                 {
@@ -175,103 +181,67 @@ public static class AmbientScopeService
 
             public IServiceProvider ServiceProvider { get; }
 
-            /// <inheritdoc />
             public void Dispose()
             {
-                // Do nothing — we don't own this scope.
             }
 
-            /// <inheritdoc />
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
+    }
 
-        /// <summary>
-        /// Wraps a ScopeReset and disposes both the token and scope at the end.
-        /// </summary>
-        private sealed class AutoDisposeWrapper : IAmbientScopeEntry
+    private sealed class AmbientScopeLease : IAmbientScopeEntry
+    {
+        private readonly IServiceScope? _previous;
+        private readonly IServiceScope _current;
+        private readonly bool _disposeScopeOnExit;
+        private bool _disposed;
+
+        public AmbientScopeLease(IServiceScope? previous, IServiceScope current, bool disposeScopeOnExit)
         {
-            private bool _disposed;
-            private readonly AmbientScopeToken _token;
-            private readonly IDisposable _reset;
+            _previous = previous;
+            _current = current;
+            _disposeScopeOnExit = disposeScopeOnExit;
+            CurrentScope.Value = current;
+        }
 
-            public AutoDisposeWrapper(AmbientScopeToken token, IDisposable reset)
+        public void Dispose()
+        {
+            if (_disposed)
             {
-                _token = token;
-                _reset = reset;
+                return;
             }
 
-            public void Dispose()
+            _disposed = true;
+            CurrentScope.Value = _previous;
+
+            if (_disposeScopeOnExit)
             {
-                if (_disposed)
-                {
-                    return;
-                }
-
-                _disposed = true;
-
-                _reset.Dispose();
-                _token.Dispose();
-            }
-
-            public async ValueTask DisposeAsync()
-            {
-                if (_disposed)
-                {
-                    return;
-                }
-
-                _disposed = true;
-
-                if (_reset is IAsyncDisposable asyncReset)
-                {
-                    await asyncReset.DisposeAsync();
-                }
-                else
-                {
-                    _reset.Dispose();
-                }
-
-                await _token.DisposeAsync();
+                _current.Dispose();
             }
         }
 
-        /// <summary>
-        /// Wraps a ScopeReset for reusable scopes.
-        /// Only resets AsyncLocal on dispose; does NOT dispose the underlying scope.
-        /// </summary>
-        private sealed class ReusableEntry : IAmbientScopeEntry
+        public ValueTask DisposeAsync()
         {
-            private bool _disposed;
-            private readonly ScopeReset _reset;
-
-            public ReusableEntry(ScopeReset reset)
+            if (_disposed)
             {
-                _reset = reset;
-            }
-
-            public void Dispose()
-            {
-                if (_disposed)
-                {
-                    return;
-                }
-
-                _disposed = true;
-                // only reset AsyncLocal
-                _reset.CurrentScopeResetOnly();
-            }
-
-            public ValueTask DisposeAsync()
-            {
-                if (_disposed)
-                {
-                    return ValueTask.CompletedTask;
-                }
-
-                _disposed = true;
-                _reset.CurrentScopeResetOnly();
                 return ValueTask.CompletedTask;
             }
+
+            _disposed = true;
+            CurrentScope.Value = _previous;
+
+            if (!_disposeScopeOnExit)
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            if (_current is IAsyncDisposable asyncDisposable)
+            {
+                return asyncDisposable.DisposeAsync();
+            }
+
+            _current.Dispose();
+            return ValueTask.CompletedTask;
         }
     }
 }
