@@ -4,7 +4,7 @@
         <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <PackageVersion>1.5.0.1</PackageVersion>
+        <PackageVersion>1.5.1.2</PackageVersion>
         <Title>Misc</Title>
         <Authors>Ihor Leleka</Authors>
         <Description>Misc and helpers.</Description>
@@ -24,13 +24,13 @@
     </ItemGroup>
 
     <ItemGroup Condition=" '$(TargetFramework)' == 'net8.0' ">
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2"/>
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="[8.0.0, 9.0.0)"/>
     </ItemGroup>
     <ItemGroup Condition=" '$(TargetFramework)' == 'net9.0' ">
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.11"/>
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="[9.0.0, 10.0.0)"/>
     </ItemGroup>
     <ItemGroup Condition=" '$(TargetFramework)' == 'net10.0' ">
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.1"/>
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="[10.0.0, 11.0.0)"/>
     </ItemGroup>
 
 </Project>
