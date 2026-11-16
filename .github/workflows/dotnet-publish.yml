@@ -13,6 +13,10 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    permissions:
+      id-token: write
+      contents: read
+
     steps:
     - uses: actions/checkout@v7
     - name: Validate release version parser
@@ -39,6 +43,11 @@ jobs:
     - name: Pack NuGet package
       run: dotnet pack Code/IL.Misc.csproj --no-build --no-restore --configuration Release --output ./nupkg
       if: success() && github.ref_type == 'tag'    
+    - name: NuGet login
+      id: login
+      uses: NuGet/login@v1.2.0
+      with:
+        user: ihorleleka
     - name: Publish NuGet package
-      run: dotnet nuget push ./nupkg/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }}
+      run: dotnet nuget push ./nupkg/*.nupkg --source https://api.nuget.org/v3/index.json --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --skip-duplicate
       if: success() && github.ref_type == 'tag'
