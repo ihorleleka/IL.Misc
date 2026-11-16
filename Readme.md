@@ -1,9 +1,43 @@
 [![NuGet version (IL.Misc)](https://img.shields.io/nuget/v/IL.Misc.svg?style=flat-square)](https://www.nuget.org/packages/IL.Misc/)
 # Misc & helpers
 
+## Supported frameworks and development
+
+The library and tests target .NET 10 and 11. The .NET 10 target uses DI abstractions
+and implementation 10.0.15, with the library dependency constrained to major
+version 10. .NET 11 includes DI abstractions in Microsoft.NETCore.App, so the
+library needs no separate package dependency for that target; the tests use the
+DI implementation package 11.0.0.
+
+Use the .NET 11 SDK to build both targets, with the .NET 10 and 11 runtimes
+installed to execute the complete test suite:
+
+```sh
+dotnet restore IL.Misc.slnx
+dotnet build IL.Misc.slnx --configuration Release --no-restore
+dotnet test IL.Misc.slnx --configuration Release --no-build --no-restore
+dotnet test Tests/IL.Misc.Tests.csproj --configuration Release --no-build --no-restore --collect:"XPlat Code Coverage"
+```
+
+Build CI builds and tests both targets with coverage collection. The release
+workflow also runs all tests before producing a package. The tests include real
+DI scope lifetime and async disposal checks on each target. The project retains xUnit v2; its current VSTest
+adapter supports xUnit v2 on all supported targets. Unused Moq and console-runner
+dependencies have been removed.
+
+## Release version policy
+
+Local builds default to `0.0.0-dev`. Tag-triggered releases derive package and
+assembly metadata from one validated tag: an optional `v`, a three- or four-part
+numeric version, and optional prerelease/build metadata. The release helper
+exports the version properties once before restore, build, test, and pack;
+assembly/file versions use the numeric core, while informational versions retain
+prerelease/build metadata without an appended source revision. Invalid tags fail
+before building. Publishing remains tag-only.
+
 ## Concurrency - Lock Manager
 
-Tiny lock manager implementation incapsulating SemaphoreSlim. Thread safe aquire of lock implementing double-checked locking.
+Process-local keyed concurrency control built on `SemaphoreSlim`. A key and concurrency limit together identify a lock; different limits are intentionally independent. Availability is advisory, not a reservation. Idle entries are retired after approximately one minute by a shared cleanup timer; queued waiters and in-progress acquisitions prevent retirement.
 
 Usage sample:
 
@@ -14,7 +48,7 @@ using (await LockManager.GetLockAsync("testKey"))
 }
 ```
 ```
-using (await LockManager.GetLockAsync("testKey", maxConcurrentCalls = 4))
+using (await LockManager.GetLockAsync("testKey", maxConcurrentCalls: 4))
 {
   //code inside is limited to 4 threads, all other threads will be awaiting..
 }
@@ -40,7 +74,7 @@ It is intended for cases where the current scoped `IServiceProvider` must be ava
 ### Ownership Modes
 
 - `AmbientScopeEnterMode.DisposeOnExit`
-  The entered scope is restored on exit and the underlying scope is disposed.
+  The previous ambient scope is restored on exit and token disposal is requested. New entries are then rejected; the underlying scope is disposed exactly once after the final active lease exits.
 - `AmbientScopeEnterMode.Reusable`
   The previous ambient scope is restored on exit, but the underlying scope is kept alive for reuse.
 
@@ -49,8 +83,7 @@ It is intended for cases where the current scoped `IServiceProvider` must be ava
 Prefer creating tokens from `IServiceScope`:
 
 ```csharp
-using var scope = serviceProvider.CreateScope();
-var token = AmbientScopeService.CreateToken(scope);
+using var token = AmbientScopeService.CreateToken(serviceProvider.CreateScope());
 
 using (token.Enter())
 {
@@ -91,7 +124,7 @@ await using (token.Enter(AmbientScopeEnterMode.Reusable))
 }
 ```
 
-Nested enters restore the previous ambient scope when the inner lease exits.
+Nested enters restore the previous ambient scope when the inner lease exits. Dispose leases in reverse entry order; out-of-order disposal throws without closing the lease. Token disposal while leases are active requests cleanup without waiting; the final lease chooses synchronous or asynchronous cleanup. Use `await using` on that lease for scopes containing async-only services. Do not transfer leases between independent execution flows; each parallel user must acquire its own entry. Inheriting an ambient value does not extend the scope lifetime.
 
 ### Guidance and Caveats
 

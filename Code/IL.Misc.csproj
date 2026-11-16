@@ -1,10 +1,9 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+        <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <PackageVersion>1.5.1.2</PackageVersion>
         <Title>Misc</Title>
         <Authors>Ihor Leleka</Authors>
         <Description>Misc and helpers.</Description>
@@ -16,6 +15,12 @@
         <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
         <PackageReadmeFile>Readme.md</PackageReadmeFile>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <EnablePackageValidation>true</EnablePackageValidation>
+        <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+        <EnableAotAnalyzer>true</EnableAotAnalyzer>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+        <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     </PropertyGroup>
 
     <ItemGroup>
@@ -23,14 +28,9 @@
         <None Include="Readme.md" Pack="true" Visible="false" PackagePath=""/>
     </ItemGroup>
 
-    <ItemGroup Condition=" '$(TargetFramework)' == 'net8.0' ">
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="[8.0.0, 9.0.0)"/>
-    </ItemGroup>
-    <ItemGroup Condition=" '$(TargetFramework)' == 'net9.0' ">
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="[9.0.0, 10.0.0)"/>
-    </ItemGroup>
     <ItemGroup Condition=" '$(TargetFramework)' == 'net10.0' ">
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="[10.0.0, 11.0.0)"/>
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="[10.0.15, 11.0.0)"/>
     </ItemGroup>
+    <!-- .NET 11 provides DependencyInjection.Abstractions in Microsoft.NETCore.App. -->
 
 </Project>

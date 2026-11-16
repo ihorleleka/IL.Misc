@@ -1,25 +1,64 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 
 namespace IL.Misc.Concurrency;
 
+/// <summary>Provides reusable keyed locks with configurable concurrency limits.</summary>
 public static class LockManager
 {
-    private const int SelfDeletionDelayInMinutes = 1;
-    private static readonly ConcurrentDictionary<string, Lazy<Lock>> Locks = new();
+    private const long IdleTimeoutMilliseconds = 60_000;
+    // Sweep at modest frequency: entries stay reusable for at least one minute and normally
+    // retire within the next ten seconds (timer scheduling may delay cleanup further).
+    private const int SweepIntervalMilliseconds = 10_000;
+    private static readonly ConcurrentDictionary<LockKey, Lazy<Lock>> Locks = new();
+    private static readonly Timer EvictionTimer = CreateEvictionTimer();
 
-    /// <summary>
-    /// By availability, it means Lock has any available slots on semaphore or not created at all.
-    /// Locks with different concurrency level with be created as different locks
-    /// </summary>
-    /// <param name="key"></param>
-    /// <param name="maxConcurrentCalls"></param>
-    /// <returns></returns>
-    public static bool IsLockAvailable(string key, int maxConcurrentCalls = 1)
+    internal readonly record struct LockKey(string Key, int MaxConcurrentCalls);
+
+    private static Timer CreateEvictionTimer()
     {
-        var lockExists = Locks.TryGetValue($"{key}{maxConcurrentCalls}", out var concurrentLock);
-        return !lockExists || concurrentLock?.Value.GetState() > 0;
+        // A static callback alone does not prevent Timer from retaining the first caller's context.
+        if (ExecutionContext.IsFlowSuppressed())
+        {
+            return new Timer(static _ => Sweep(Environment.TickCount64), null, SweepIntervalMilliseconds, SweepIntervalMilliseconds);
+        }
+
+        using (ExecutionContext.SuppressFlow())
+        {
+            return new Timer(static _ => Sweep(Environment.TickCount64), null, SweepIntervalMilliseconds, SweepIntervalMilliseconds);
+        }
     }
 
+    private static void Sweep(long timestamp)
+    {
+        foreach (var pair in Locks)
+        {
+            if (pair.Value.IsValueCreated)
+            {
+                pair.Value.Value.TryRetire(pair.Key, pair.Value, timestamp);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reports whether the lock has an available semaphore slot or has not been created.
+    /// Different concurrency limits identify different locks.
+    /// </summary>
+    public static bool IsLockAvailable(string key, int maxConcurrentCalls = 1)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxConcurrentCalls);
+        var dictionaryKey = new LockKey(key ?? string.Empty, maxConcurrentCalls);
+        while (Locks.TryGetValue(dictionaryKey, out var entry))
+        {
+            if (entry.Value.TryGetState(out var state))
+            {
+                return state > 0;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Waits for a slot in the keyed lock and returns an idempotent release handle.</summary>
     public static IDisposable GetLock(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
     {
         var concurrentLock = AcquireLock(key, maxConcurrentCalls);
@@ -27,21 +66,41 @@ public static class LockManager
         return new LockReleaser(concurrentLock);
     }
 
+    /// <summary>Asynchronously waits for a slot in the keyed lock and returns an idempotent release handle.</summary>
     public static async Task<IDisposable> GetLockAsync(string key, int maxConcurrentCalls = 1, CancellationToken cancellationToken = default)
     {
         var concurrentLock = AcquireLock(key, maxConcurrentCalls);
-        await concurrentLock.WaitAsync(cancellationToken);
+        await concurrentLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         return new LockReleaser(concurrentLock);
     }
 
-    private static Lock AcquireLock(string key, int maxConcurrentCalls)
+    // Also a deterministic test seam for the interval between reservation and semaphore wait.
+    internal static Lock AcquireLock(string key, int maxConcurrentCalls, Action<Lock>? beforeReservation = null)
     {
-        var dictionaryKey = $"{key}{maxConcurrentCalls}";
-        return Locks
-            .GetOrAdd(dictionaryKey,
-                k => new Lazy<Lock>(() => new Lock(maxConcurrentCalls, () => { Locks.TryRemove(k, out _); }), LazyThreadSafetyMode.ExecutionAndPublication)
-            )
-            .Value;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxConcurrentCalls);
+        var dictionaryKey = new LockKey(key ?? string.Empty, maxConcurrentCalls);
+        while (true)
+        {
+            var entry = Locks.GetOrAdd(dictionaryKey, static k =>
+                new Lazy<Lock>(() => new Lock(k.MaxConcurrentCalls), LazyThreadSafetyMode.ExecutionAndPublication));
+            var concurrentLock = entry.Value;
+            beforeReservation?.Invoke(concurrentLock);
+            if (concurrentLock.TryReserve())
+            {
+                return concurrentLock;
+            }
+            // Retirement won the gate after lookup. Never wait on that semaphore; retry the cache.
+        }
+    }
+
+    // Targeted test hooks use the production retirement path, without altering the global clock/timer.
+    internal static Lock? GetCachedLock(string key, int maxConcurrentCalls = 1) =>
+        Locks.TryGetValue(new LockKey(key ?? string.Empty, maxConcurrentCalls), out var entry) ? entry.Value : null;
+
+    internal static bool TryEvict(string key, int maxConcurrentCalls, long timestamp)
+    {
+        var dictionaryKey = new LockKey(key ?? string.Empty, maxConcurrentCalls);
+        return Locks.TryGetValue(dictionaryKey, out var entry) && entry.Value.TryRetire(dictionaryKey, entry, timestamp);
     }
 
     internal sealed class LockReleaser : IDisposable
@@ -53,6 +112,7 @@ public static class LockManager
             _lock = l;
             InternalLock = l;
         }
+
         internal Lock InternalLock { get; }
 
         public void Dispose()
@@ -64,92 +124,114 @@ public static class LockManager
 
     internal sealed class Lock
     {
+        private readonly object _gate = new();
         private readonly SemaphoreSlim _semaphoreSlim;
-        private readonly Action? _selfDeletionAction;
-        private int _activeCount;
-        private bool _scheduledForDeletion;
+        // Includes holders, waiters, and callers that have not reached Wait yet.
+        private int _reservations;
+        private bool _retired;
+        private long _idleSince = Environment.TickCount64;
 
-        internal Lock(int maxConcurrentCalls = 1, Action? selfDeletionAction = null)
+        internal Lock(int maxConcurrentCalls = 1)
         {
             _semaphoreSlim = new SemaphoreSlim(maxConcurrentCalls, maxConcurrentCalls);
-            _selfDeletionAction = selfDeletionAction;
+        }
+
+        internal long IdleSince
+        {
+            get { lock (_gate) { return _idleSince; } }
+        }
+
+        internal bool TryReserve()
+        {
+            lock (_gate)
+            {
+                if (_retired)
+                {
+                    return false;
+                }
+
+                ++_reservations;
+                return true;
+            }
         }
 
         internal void Wait(CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref _activeCount);
             try
             {
                 _semaphoreSlim.Wait(cancellationToken);
             }
             catch
             {
-                Interlocked.Decrement(ref _activeCount);
+                CancelReservation();
                 throw;
             }
         }
 
         internal async Task WaitAsync(CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref _activeCount);
             try
             {
-                await _semaphoreSlim.WaitAsync(cancellationToken);
+                await _semaphoreSlim.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
             catch
             {
-                Interlocked.Decrement(ref _activeCount);
+                CancelReservation();
                 throw;
             }
         }
 
         internal void Release()
         {
+            // Keep the reservation until Release has finished touching the semaphore.
             _semaphoreSlim.Release();
-            if (Interlocked.Decrement(ref _activeCount) == 0)
-            {
-                ScheduleEviction();
-            }
+            CancelReservation();
         }
 
-        private void ScheduleEviction()
+        internal void CancelReservation()
         {
-            lock (this)
+            lock (_gate)
             {
-                if (_scheduledForDeletion)
+                if (--_reservations == 0)
                 {
-                    return;
+                    _idleSince = Environment.TickCount64;
                 }
-                _scheduledForDeletion = true;
             }
-
-            Task
-                .Delay(TimeSpan.FromMinutes(SelfDeletionDelayInMinutes))
-                .ContinueWith(_ =>
-                {
-                    var shouldEvict = false;
-                    lock (this)
-                    {
-                        if (_scheduledForDeletion && Volatile.Read(ref _activeCount) == 0)
-                        {
-                            shouldEvict = true;
-                        }
-                        else
-                        {
-                            _scheduledForDeletion = false;
-                        }
-                    }
-
-                    if (!shouldEvict)
-                    {
-                        return;
-                    }
-
-                    _selfDeletionAction?.Invoke();
-                    _semaphoreSlim.Dispose();
-                });
         }
 
-        internal int GetState() => _semaphoreSlim.CurrentCount;
+        internal bool TryRetire(LockKey key, Lazy<Lock> entry, long timestamp)
+        {
+            lock (_gate)
+            {
+                if (_retired || _reservations != 0 || timestamp - _idleSince < IdleTimeoutMilliseconds)
+                {
+                    return false;
+                }
+
+                // Reservation, retirement, identity-checked removal and disposal share the gate.
+                // A caller holding an old dictionary value must fail TryReserve and retry.
+                _retired = true;
+                ((ICollection<KeyValuePair<LockKey, Lazy<Lock>>>)Locks).Remove(new(key, entry));
+                _semaphoreSlim.Dispose();
+                return true;
+            }
+        }
+
+        internal bool TryGetState(out int state)
+        {
+            lock (_gate)
+            {
+                state = _retired ? 0 : _semaphoreSlim.CurrentCount;
+                return !_retired;
+            }
+        }
+
+        internal int GetState()
+        {
+            lock (_gate)
+            {
+                return _semaphoreSlim.CurrentCount;
+            }
+        }
     }
 }

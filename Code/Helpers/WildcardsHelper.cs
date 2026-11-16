@@ -1,10 +1,13 @@
 namespace IL.Misc.Helpers;
 
+/// <summary>Case-sensitive ordinal wildcard matching without per-call allocations.</summary>
 public static class WildcardsHelper
 {
-    public static bool MatchesWildcard(this string input, string wildcard)
+    /// <summary>Matches '*' (zero or more UTF-16 characters) and '?' (one UTF-16 character).</summary>
+    /// <remarks>Null input or pattern never matches. Worst-case running time is O(input length × pattern length).</remarks>
+    public static bool MatchesWildcard(this string? input, string? wildcard)
     {
-        return MatchesWildcardSpan(input.AsSpan(), wildcard.AsSpan());
+        return input is not null && wildcard is not null && MatchesWildcardSpan(input.AsSpan(), wildcard.AsSpan());
     }
 
     private static bool MatchesWildcardSpan(ReadOnlySpan<char> input, ReadOnlySpan<char> wildcard)

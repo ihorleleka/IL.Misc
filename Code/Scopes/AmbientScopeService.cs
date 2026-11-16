@@ -5,6 +5,12 @@ namespace IL.Misc.Scopes;
 /// <summary>
 /// Represents an active ambient scope lease.
 /// </summary>
+/// <remarks>
+/// Dispose leases in reverse entry order within the execution flow that entered them.
+/// Awaiting within that flow is supported; transferring a lease to another flow is not.
+/// ExecutionContext inheritance does not acquire another lease: parallel users must enter
+/// the token independently and keep their leases alive for their entire use of the provider.
+/// </remarks>
 public interface IAmbientScopeEntry : IDisposable, IAsyncDisposable
 {
 }
@@ -32,7 +38,7 @@ public interface IAmbientScopeToken : IDisposable, IAsyncDisposable
 public enum AmbientScopeEnterMode
 {
     /// <summary>
-    /// Dispose the underlying scope when the ambient lease exits.
+    /// Request disposal when the ambient lease exits; defer cleanup until the final active lease exits.
     /// </summary>
     DisposeOnExit,
 
@@ -47,7 +53,23 @@ public enum AmbientScopeEnterMode
 /// </summary>
 public static class AmbientScopeService
 {
-    private static readonly AsyncLocal<IServiceScope?> CurrentScope = new();
+    private static readonly AsyncLocal<AmbientScopeLease?> CurrentEntry = new();
+
+    // ExecutionContext copies frame references, not ownership of their leases. Never
+    // expose a frame another flow has already closed.
+    private static AmbientScopeLease? ActiveEntry
+    {
+        get
+        {
+            var entry = CurrentEntry.Value;
+            while (entry != null && entry.IsDisposed)
+            {
+                entry = entry.Previous;
+            }
+
+            return entry;
+        }
+    }
 
     /// <summary>
     /// Gets the currently active ambient service provider.
@@ -56,7 +78,7 @@ public static class AmbientScopeService
     /// Thrown when no ambient scope is currently active.
     /// </exception>
     public static IServiceProvider CurrentServiceProvider =>
-        CurrentScope.Value?.ServiceProvider
+        ActiveEntry?.Scope.ServiceProvider
         ?? throw new InvalidOperationException("No active service scope.");
 
     /// <summary>
@@ -83,13 +105,25 @@ public static class AmbientScopeService
     /// <summary>
     /// A reusable token that allows re-entering the same service scope.
     /// </summary>
+    /// <remarks>
+    /// Token disposal, or exit of a DisposeOnExit lease, immediately prevents new entries.
+    /// The owned scope is disposed exactly once after all active entries exit. A disposal
+    /// request with active entries returns without waiting; the final lease's disposal method
+    /// selects synchronous or asynchronous cleanup. Use DisposeAsync on that lease for scopes
+    /// containing async-only services. Repeated disposal calls are no-ops, not completion joins.
+    /// The Scope property exposes the original scope; disposing it directly bypasses this lifetime management.
+    /// </remarks>
     public sealed class AmbientScopeToken : IAmbientScopeToken
     {
         private readonly IServiceScope _scope;
-        private bool _disposed;
+        private readonly object _gate = new();
+        private int _activeEntries;
+        private bool _disposalRequested;
+        private bool _disposalStarted;
 
         internal AmbientScopeToken(IServiceScope scope)
         {
+            ArgumentNullException.ThrowIfNull(scope);
             _scope = scope;
         }
 
@@ -112,9 +146,19 @@ public static class AmbientScopeService
         /// </exception>
         public IAmbientScopeEntry Enter(AmbientScopeEnterMode mode = AmbientScopeEnterMode.DisposeOnExit)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (mode != AmbientScopeEnterMode.DisposeOnExit && mode != AmbientScopeEnterMode.Reusable)
+            {
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown ambient scope entry mode.");
+            }
 
-            return new AmbientScopeLease(CurrentScope.Value, _scope, disposeScopeOnExit: mode == AmbientScopeEnterMode.DisposeOnExit);
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposalRequested, this);
+                var entry = new AmbientScopeLease(ActiveEntry, this, mode == AmbientScopeEnterMode.DisposeOnExit);
+                _activeEntries++;
+                CurrentEntry.Value = entry;
+                return entry;
+            }
         }
 
         /// <summary>
@@ -130,13 +174,10 @@ public static class AmbientScopeService
         /// </remarks>
         public void Dispose()
         {
-            if (_disposed)
+            if (TryBeginDisposal(exitEntry: false, requestDisposal: true))
             {
-                return;
+                _scope.Dispose();
             }
-
-            _disposed = true;
-            _scope.Dispose();
         }
 
         /// <summary>
@@ -145,23 +186,53 @@ public static class AmbientScopeService
         /// <remarks>
         /// If this token was created from <see cref="CreateToken(IServiceProvider)"/>, asynchronous disposal is a no-op for the wrapped provider lifetime.
         /// </remarks>
-        public async ValueTask DisposeAsync()
+        public ValueTask DisposeAsync() =>
+            TryBeginDisposal(exitEntry: false, requestDisposal: true)
+                ? DisposeScopeAsync()
+                : ValueTask.CompletedTask;
+
+        private bool TryBeginDisposal(bool exitEntry, bool requestDisposal)
         {
-            if (_disposed)
+            lock (_gate)
             {
-                return;
-            }
+                if (exitEntry)
+                {
+                    _activeEntries--;
+                }
 
-            _disposed = true;
+                _disposalRequested |= requestDisposal;
+                if (!_disposalRequested || _activeEntries != 0 || _disposalStarted)
+                {
+                    return false;
+                }
 
-            if (_scope is IAsyncDisposable asyncDisposable)
-            {
-                await asyncDisposable.DisposeAsync();
+                _disposalStarted = true;
+                return true;
             }
-            else
+        }
+
+        internal void Exit(bool requestDisposal)
+        {
+            if (TryBeginDisposal(exitEntry: true, requestDisposal))
             {
                 _scope.Dispose();
             }
+        }
+
+        internal ValueTask ExitAsync(bool requestDisposal) =>
+            TryBeginDisposal(exitEntry: true, requestDisposal)
+                ? DisposeScopeAsync()
+                : ValueTask.CompletedTask;
+
+        private ValueTask DisposeScopeAsync()
+        {
+            if (_scope is IAsyncDisposable asyncDisposable)
+            {
+                return asyncDisposable.DisposeAsync();
+            }
+
+            _scope.Dispose();
+            return ValueTask.CompletedTask;
         }
 
         private sealed class ExistingScopedServiceProviderScopeWrapper : IServiceScope, IAsyncDisposable
@@ -191,57 +262,54 @@ public static class AmbientScopeService
 
     private sealed class AmbientScopeLease : IAmbientScopeEntry
     {
-        private readonly IServiceScope? _previous;
-        private readonly IServiceScope _current;
+        private readonly AmbientScopeToken _token;
         private readonly bool _disposeScopeOnExit;
-        private bool _disposed;
+        private readonly object _gate = new();
+        private volatile bool _disposed;
 
-        public AmbientScopeLease(IServiceScope? previous, IServiceScope current, bool disposeScopeOnExit)
+        public AmbientScopeLease(AmbientScopeLease? previous, AmbientScopeToken token, bool disposeScopeOnExit)
         {
-            _previous = previous;
-            _current = current;
+            Previous = previous;
+            _token = token;
             _disposeScopeOnExit = disposeScopeOnExit;
-            CurrentScope.Value = current;
+        }
+
+        public AmbientScopeLease? Previous { get; }
+        public IServiceScope Scope => _token.Scope;
+        public bool IsDisposed => _disposed;
+
+        private bool RestoreContext()
+        {
+            lock (_gate)
+            {
+                if (_disposed)
+                {
+                    return false;
+                }
+
+                if (!ReferenceEquals(ActiveEntry, this))
+                {
+                    throw new InvalidOperationException("Ambient scope leases must exit in reverse entry order in their originating execution flow.");
+                }
+
+                _disposed = true;
+                CurrentEntry.Value = ActiveEntry;
+                return true;
+            }
         }
 
         public void Dispose()
         {
-            if (_disposed)
+            if (RestoreContext())
             {
-                return;
-            }
-
-            _disposed = true;
-            CurrentScope.Value = _previous;
-
-            if (_disposeScopeOnExit)
-            {
-                _current.Dispose();
+                _token.Exit(_disposeScopeOnExit);
             }
         }
 
-        public ValueTask DisposeAsync()
-        {
-            if (_disposed)
-            {
-                return ValueTask.CompletedTask;
-            }
-
-            _disposed = true;
-            CurrentScope.Value = _previous;
-
-            if (!_disposeScopeOnExit)
-            {
-                return ValueTask.CompletedTask;
-            }
-
-            if (_current is IAsyncDisposable asyncDisposable)
-            {
-                return asyncDisposable.DisposeAsync();
-            }
-
-            _current.Dispose();
-            return ValueTask.CompletedTask;
-        }
+        // Do not make this method async: AsyncLocal restoration must be visible
+        // to the caller before asynchronous scope disposal starts.
+        public ValueTask DisposeAsync() => RestoreContext()
+            ? _token.ExitAsync(_disposeScopeOnExit)
+            : ValueTask.CompletedTask;
     }
 }

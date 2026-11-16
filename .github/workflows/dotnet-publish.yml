@@ -14,25 +14,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Set Version Variable
+    - uses: actions/checkout@v7
+    - name: Validate release version parser
+      shell: pwsh
+      run: ./.github/scripts/Test-ReleaseVersion.ps1
+    - name: Set release version from tag
       if: ${{ github.ref_type == 'tag' }}
+      shell: pwsh
       env:
-        TAG: ${{ github.ref_name }}
-      run: echo "VERSION=${TAG#v}" >> $GITHUB_ENV
+        RELEASE_TAG: ${{ github.ref_name }}
+      run: ./.github/scripts/Set-ReleaseVersion.ps1 -Tag $env:RELEASE_TAG
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: |
+          11.0.x
           10.0.x
-          9.0.x
-          8.0.x
     - name: Restore dependencies
       run: dotnet restore
     - name: Build
-      run: dotnet build --no-restore --configuration Release /p:Version=$VERSION
+      run: dotnet build --no-restore --configuration Release
+    - name: Test all target frameworks
+      run: dotnet test --no-build --no-restore --configuration Release --verbosity normal
     - name: Pack NuGet package
-      run: dotnet pack --configuration Release --output ./nupkg /p:PackageVersion=$VERSION
+      run: dotnet pack Code/IL.Misc.csproj --no-build --no-restore --configuration Release --output ./nupkg
       if: success() && github.ref_type == 'tag'    
     - name: Publish NuGet package
       run: dotnet nuget push ./nupkg/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }}
